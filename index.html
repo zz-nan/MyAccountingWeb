@@ -3,9 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>收支账单录入</title>
+    <title>收支账单录入 - GitHub 同步版</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css">
     <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
     <style>
         body {
             background-color: #f8f9fa;
@@ -81,15 +82,86 @@
             display: flex;
             gap: 5px;
         }
+        .sync-status {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            padding: 10px 20px;
+            border-radius: 5px;
+            color: white;
+            font-weight: bold;
+            display: none;
+            z-index: 1000;
+        }
+        .sync-status.success {
+            background-color: #28a745;
+        }
+        .sync-status.error {
+            background-color: #dc3545;
+        }
+        .sync-status.syncing {
+            background-color: #ffc107;
+            color: #000;
+        }
+        .config-section {
+            background-color: #fff3cd;
+            border: 1px solid #ffc107;
+            border-radius: 5px;
+            padding: 15px;
+            margin-bottom: 20px;
+        }
+        .github-connected {
+            background-color: #d4edda;
+            border-color: #28a745;
+        }
     </style>
 </head>
 <body>
+    <!-- GitHub 配置区域 -->
     <div class="container">
+        <div class="card config-section" id="configSection">
+            <div class="card-body">
+                <h6 class="card-title">
+                    <span id="configIcon">⚙️</span> GitHub 配置
+                    <button class="btn btn-sm btn-link float-end" type="button" data-bs-toggle="collapse" data-bs-target="#configForm">
+                        <span id="configToggleText">展开</span>
+                    </button>
+                </h6>
+                <div class="collapse" id="configForm">
+                    <div class="mb-2">
+                        <label class="form-label">GitHub 用户名</label>
+                        <input type="text" class="form-control form-control-sm" id="githubUsername" placeholder="例如: zz-nan">
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label">仓库名称</label>
+                        <input type="text" class="form-control form-control-sm" id="githubRepo" placeholder="例如: MyAccountingData">
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label">
+                            Personal Access Token
+                            <a href="https://github.com/settings/tokens/new" target="_blank" class="btn btn-sm btn-outline-primary ms-2">获取 Token</a>
+                        </label>
+                        <input type="password" class="form-control form-control-sm" id="githubToken" placeholder="ghp_xxxxxxxxxxxx">
+                        <small class="text-muted">Token 需要 repo 权限</small>
+                    </div>
+                    <div class="mb-2">
+                        <label class="form-label">Excel 文件路径</label>
+                        <input type="text" class="form-control form-control-sm" id="excelPath" value="data/收支账单.xlsx">
+                    </div>
+                    <button class="btn btn-sm btn-primary" onclick="saveConfig()">保存配置</button>
+                    <button class="btn btn-sm btn-success" onclick="testConnection()">测试连接</button>
+                    <button class="btn btn-sm btn-info" onclick="loadFromGitHub()">从 GitHub 加载</button>
+                </div>
+            </div>
+        </div>
+
         <div class="card">
             <div class="card-header text-center bg-primary text-white">
                 <div class="d-flex justify-content-between align-items-center">
                     <h5 class="mb-0">收支账单录入</h5>
-                    <button class="btn btn-light btn-sm" onclick="exportData()">导出数据</button>
+                    <div>
+                        <button class="btn btn-light btn-sm" onclick="syncToGitHub()">🔄 同步到 GitHub</button>
+                    </div>
                 </div>
             </div>
             <div class="card-body">
@@ -206,10 +278,15 @@
         </div>
     </div>
 
+    <!-- 同步状态提示 -->
+    <div class="sync-status" id="syncStatus"></div>
+
     <script>
-        // ==================== 数据管理 ====================
-        const STORAGE_KEY = 'my_accounting_data';
+        // ==================== 常量定义 ====================
+        const CONFIG_KEY = 'github_config';
+        const DATA_KEY = 'accounting_data';
         const HEADERS = ["日期", "类型", "分类", "金额", "备注"];
+        const SHEET_NAME = "账单明细";
 
         // 收入分类
         const INCOME_CATEGORIES = ["薪资", "投资收益", "其他"];
@@ -217,61 +294,225 @@
         // 支出分类
         const EXPENSE_CATEGORIES = ["房租", "房贷", "餐饮", "交通", "日用品", "水电燃气", "购物", "汽车", "医疗", "其他"];
 
-        // 从 localStorage 读取数据
-        function getData() {
-            const data = localStorage.getItem(STORAGE_KEY);
-            return data ? JSON.parse(data) : [];
-        }
-
-        // 保存数据到 localStorage
-        function saveData(data) {
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
-        }
-
-        // ==================== CRUD 操作 ====================
+        // ==================== 全局变量 ====================
+        let billData = [];
         let isEditMode = false;
         let currentEditIndex = -1;
+        let pieChart = null;
 
-        // 添加记录
+        // ==================== GitHub API ====================
+        function getGitHubConfig() {
+            const config = localStorage.getItem(CONFIG_KEY);
+            return config ? JSON.parse(config) : null;
+        }
+
+        function saveGitHubConfig(config) {
+            localStorage.setItem(CONFIG_KEY, JSON.stringify(config));
+        }
+
+        async function githubAPIRequest(endpoint, method = 'GET', body = null) {
+            const config = getGitHubConfig();
+            if (!config) {
+                throw new Error('请先配置 GitHub 信息');
+            }
+
+            const headers = {
+                'Authorization': `Bearer ${config.token}`,
+                'Accept': 'application/vnd.github.v3+json',
+                'Content-Type': 'application/json',
+            };
+
+            const options = {
+                method,
+                headers,
+            };
+
+            if (body) {
+                options.body = JSON.stringify(body);
+            }
+
+            const response = await fetch(`https://api.github.com${endpoint}`, options);
+
+            if (!response.ok) {
+                const error = await response.json();
+                throw new Error(error.message || 'GitHub API 请求失败');
+            }
+
+            return response.json();
+        }
+
+        async function getFileFromGitHub() {
+            const config = getGitHubConfig();
+            try {
+                const encodedPath = config.excelPath.split('/').map(encodeURIComponent).join('/');
+                const data = await githubAPIRequest(`/repos/${config.username}/${config.repo}/contents/${encodedPath}`);
+
+                // 解码 base64 内容
+                const content = atob(data.content);
+                const workbook = XLSX.read(content, { type: 'binary' });
+                const worksheet = workbook.Sheets[SHEET_NAME];
+
+                if (!worksheet) {
+                    return [];
+                }
+
+                const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: HEADERS });
+                // 跳过标题行
+                return jsonData.slice(1);
+            } catch (error) {
+                if (error.message.includes('Not Found')) {
+                    // 文件不存在，返回空数组
+                    return [];
+                }
+                throw error;
+            }
+        }
+
+        async function saveFileToGitHub(data) {
+            const config = getGitHubConfig();
+
+            // 创建工作簿
+            const workbook = XLSX.utils.book_new();
+            const worksheet = XLSX.utils.json_to_sheet([HEADERS, ...data], { header: HEADERS.slice(1) });
+            XLSX.utils.book_append_sheet(workbook, worksheet, SHEET_NAME);
+
+            // 生成 Excel 文件
+            const excelBuffer = XLSX.write(workbook, { bookType: 'xlsx', type: 'binary' });
+
+            // 转换为 base64
+            const base64Content = btoa(excelBuffer);
+
+            // 获取当前文件 SHA（如果存在）
+            let sha = null;
+            try {
+                const encodedPath = config.excelPath.split('/').map(encodeURIComponent).join('/');
+                const fileData = await githubAPIRequest(`/repos/${config.username}/${config.repo}/contents/${encodedPath}`);
+                sha = fileData.sha;
+            } catch (error) {
+                // 文件不存在，不需要 SHA
+            }
+
+            // 提交到 GitHub
+            const message = `Update accounting data ${new Date().toISOString()}`;
+            const body = {
+                message,
+                content: base64Content,
+                sha,
+            };
+
+            const encodedPath = config.excelPath.split('/').map(encodeURIComponent).join('/');
+            await githubAPIRequest(`/repos/${config.username}/${config.repo}/contents/${encodedPath}`, 'PUT', body);
+        }
+
+        // ==================== UI 操作 ====================
+        function showSyncStatus(message, type = 'success') {
+            const statusEl = document.getElementById('syncStatus');
+            statusEl.textContent = message;
+            statusEl.className = `sync-status ${type}`;
+            statusEl.style.display = 'block';
+
+            setTimeout(() => {
+                statusEl.style.display = 'none';
+            }, 3000);
+        }
+
+        function updateConfigUI() {
+            const config = getGitHubConfig();
+            const configSection = document.getElementById('configSection');
+            const configIcon = document.getElementById('configIcon');
+
+            if (config) {
+                configSection.classList.add('github-connected');
+                configSection.classList.remove('config-section');
+                configIcon.textContent = '✅';
+
+                // 填充表单
+                document.getElementById('githubUsername').value = config.username || '';
+                document.getElementById('githubRepo').value = config.repo || '';
+                document.getElementById('githubToken').value = config.token || '';
+                document.getElementById('excelPath').value = config.excelPath || 'data/收支账单.xlsx';
+            }
+        }
+
+        function saveConfig() {
+            const config = {
+                username: document.getElementById('githubUsername').value.trim(),
+                repo: document.getElementById('githubRepo').value.trim(),
+                token: document.getElementById('githubToken').value.trim(),
+                excelPath: document.getElementById('excelPath').value.trim(),
+            };
+
+            if (!config.username || !config.repo || !config.token) {
+                alert('请填写完整的 GitHub 配置信息');
+                return;
+            }
+
+            saveGitHubConfig(config);
+            updateConfigUI();
+            alert('配置已保存');
+        }
+
+        async function testConnection() {
+            try {
+                showSyncStatus('测试连接中...', 'syncing');
+                const config = getGitHubConfig();
+                await githubAPIRequest(`/repos/${config.username}/${config.repo}`);
+                showSyncStatus('连接成功！', 'success');
+            } catch (error) {
+                showSyncStatus(`连接失败: ${error.message}`, 'error');
+            }
+        }
+
+        async function loadFromGitHub() {
+            try {
+                showSyncStatus('从 GitHub 加载中...', 'syncing');
+                billData = await getFileFromGitHub();
+                localStorage.setItem(DATA_KEY, JSON.stringify(billData));
+                loadBillList();
+                loadAnalysis();
+                showSyncStatus('加载成功！', 'success');
+            } catch (error) {
+                showSyncStatus(`加载失败: ${error.message}`, 'error');
+            }
+        }
+
+        async function syncToGitHub() {
+            try {
+                showSyncStatus('同步到 GitHub 中...', 'syncing');
+                await saveFileToGitHub(billData);
+                showSyncStatus('同步成功！', 'success');
+            } catch (error) {
+                showSyncStatus(`同步失败: ${error.message}`, 'error');
+            }
+        }
+
+        // ==================== 数据操作 ====================
         function addRecord(record) {
-            const data = getData();
-            data.push(record);
-            saveData(data);
+            billData.push(record);
+            localStorage.setItem(DATA_KEY, JSON.stringify(billData));
         }
 
-        // 更新记录
         function updateRecord(index, record) {
-            const data = getData();
-            data[index] = record;
-            saveData(data);
+            billData[index] = record;
+            localStorage.setItem(DATA_KEY, JSON.stringify(billData));
         }
 
-        // 删除记录
         function deleteRecord(index) {
             if (confirm('确定要删除这条记录吗？')) {
-                const data = getData();
-                data.splice(index, 1);
-                saveData(data);
+                billData.splice(index, 1);
+                localStorage.setItem(DATA_KEY, JSON.stringify(billData));
                 loadBillList();
                 loadAnalysis();
             }
         }
 
-        // 获取单条记录
-        function getRecord(index) {
-            const data = getData();
-            return data[index];
-        }
-
-        // ==================== UI 操作 ====================
-        let pieChart = null;
-
-        // 初始化
+        // ==================== 初始化 ====================
         document.addEventListener("DOMContentLoaded", () => {
             initCharts();
             updateCategoryOptions();
             setDefaultDate();
             setDefaultMonth();
+            updateConfigUI();
 
             // 监听类型变化
             document.getElementById('type').addEventListener('change', updateCategoryOptions);
@@ -285,12 +526,22 @@
             // 表单提交
             document.getElementById('billForm').addEventListener('submit', handleSubmit);
 
-            // 加载数据
+            // 从本地存储加载数据
+            const savedData = localStorage.getItem(DATA_KEY);
+            if (savedData) {
+                billData = JSON.parse(savedData);
+            }
+
             loadBillList();
             loadAnalysis();
+
+            // 如果已配置 GitHub，自动加载
+            const config = getGitHubConfig();
+            if (config && config.autoLoad) {
+                loadFromGitHub();
+            }
         });
 
-        // 初始化图表
         function initCharts() {
             pieChart = echarts.init(document.getElementById('pieChart'));
             window.addEventListener('resize', () => {
@@ -298,19 +549,16 @@
             });
         }
 
-        // 设置默认日期为今天
         function setDefaultDate() {
             const today = new Date().toISOString().split('T')[0];
             document.getElementById('date').value = today;
         }
 
-        // 设置默认月份为当前月
         function setDefaultMonth() {
             const currentMonth = new Date().toISOString().slice(0, 7);
             document.getElementById('monthFilter').value = currentMonth;
         }
 
-        // 更新分类选项
         function updateCategoryOptions() {
             const type = document.getElementById('type').value;
             const categorySelect = document.getElementById('category');
@@ -327,8 +575,7 @@
             });
         }
 
-        // 处理表单提交
-        function handleSubmit(e) {
+        async function handleSubmit(e) {
             e.preventDefault();
 
             const formData = {
@@ -340,12 +587,10 @@
             };
 
             if (isEditMode) {
-                // 更新模式
                 updateRecord(currentEditIndex, formData);
                 alert('账单更新成功！');
                 cancelEdit();
             } else {
-                // 添加模式
                 addRecord(formData);
                 alert('账单添加成功！');
                 resetForm();
@@ -353,32 +598,33 @@
 
             loadBillList();
             loadAnalysis();
+
+            // 自动同步到 GitHub（如果已配置）
+            const config = getGitHubConfig();
+            if (config && config.autoSync) {
+                await syncToGitHub();
+            }
         }
 
-        // 编辑记录
         function editRecord(index) {
-            const record = getRecord(index);
+            const record = billData[index];
             if (!record) return;
 
-            // 填充表单
             document.getElementById('date').value = record.日期;
             document.getElementById('type').value = record.类型;
             updateCategoryOptions();
             document.getElementById('category').value = record.分类;
             document.getElementById('amount').value = record.金额;
-            document.getElementById('note').value = record.备注;
+            document.getElementById('note').value = record.备注 || '';
 
-            // 切换到编辑模式
             isEditMode = true;
             currentEditIndex = index;
             document.getElementById('submitBtn').textContent = '更新';
             document.getElementById('cancelBtn').style.display = 'block';
 
-            // 滚动到表单
             window.scrollTo({ top: 0, behavior: 'smooth' });
         }
 
-        // 取消编辑
         function cancelEdit() {
             isEditMode = false;
             currentEditIndex = -1;
@@ -387,25 +633,21 @@
             resetForm();
         }
 
-        // 重置表单
         function resetForm() {
             document.getElementById('billForm').reset();
             setDefaultDate();
             updateCategoryOptions();
         }
 
-        // 加载账单列表
         function loadBillList() {
             const month = document.getElementById('monthFilter').value;
-            const data = getData();
             const tbody = document.getElementById('billList');
 
-            let filteredData = data;
+            let filteredData = billData;
             if (month) {
-                filteredData = data.filter(item => item.日期 && item.日期.startsWith(month));
+                filteredData = billData.filter(item => item.日期 && item.日期.startsWith(month));
             }
 
-            // 按日期降序排序
             filteredData.sort((a, b) => new Date(b.日期) - new Date(a.日期));
 
             tbody.innerHTML = '';
@@ -415,9 +657,8 @@
                 return;
             }
 
-            filteredData.forEach((item, index) => {
-                // 找到原始数据中的索引
-                const originalIndex = data.indexOf(item);
+            filteredData.forEach((item) => {
+                const index = billData.indexOf(item);
 
                 const row = document.createElement('tr');
                 row.innerHTML = `
@@ -428,8 +669,8 @@
                     <td>${item.备注 || '-'}</td>
                     <td>
                         <div class="action-buttons">
-                            <button class="btn btn-sm btn-primary" onclick="editRecord(${originalIndex})">编辑</button>
-                            <button class="btn btn-sm btn-danger" onclick="deleteRecord(${originalIndex})">删除</button>
+                            <button class="btn btn-sm btn-primary" onclick="editRecord(${index})">编辑</button>
+                            <button class="btn btn-sm btn-danger" onclick="deleteRecord(${index})">删除</button>
                         </div>
                     </td>
                 `;
@@ -437,16 +678,14 @@
             });
         }
 
-        // 加载分析数据
         function loadAnalysis() {
             const month = document.getElementById('monthFilter').value;
-            const data = getData();
 
             let totalIncome = 0;
             let totalExpense = 0;
             let expenseCategories = {};
 
-            data.forEach(item => {
+            billData.forEach(item => {
                 if (!month || (item.日期 && item.日期.startsWith(month))) {
                     if (item.类型 === '收入') {
                         totalIncome += parseFloat(item.金额);
@@ -463,7 +702,6 @@
 
             const balance = totalIncome - totalExpense;
 
-            // 找出支出最高的分类
             let topExpenseCategory = '-';
             let topExpenseAmount = 0;
             const categoryEntries = Object.entries(expenseCategories);
@@ -473,25 +711,21 @@
                 topExpenseAmount = topAmt;
             }
 
-            // 更新统计卡片
             document.getElementById('totalIncome').textContent = `¥${totalIncome.toFixed(2)}`;
             document.getElementById('totalExpense').textContent = `¥${totalExpense.toFixed(2)}`;
             document.getElementById('balance').textContent = `¥${balance.toFixed(2)}`;
             document.getElementById('topExpenseCategory').textContent = topExpenseCategory;
             document.getElementById('topExpenseAmount').textContent = `¥${topExpenseAmount.toFixed(2)}`;
 
-            // 更新图表
             updateCharts(expenseCategories);
         }
 
-        // 更新图表
         function updateCharts(expenseCategories) {
             const data = Object.entries(expenseCategories).map(([name, value]) => ({
                 name,
                 value: parseFloat(value.toFixed(2))
             }));
 
-            // 按金额降序排序
             data.sort((a, b) => b.value - a.value);
 
             const option = {
@@ -535,21 +769,6 @@
             };
 
             pieChart.setOption(option);
-        }
-
-        // 导出数据为 JSON 文件
-        function exportData() {
-            const data = getData();
-            const dataStr = JSON.stringify(data, null, 2);
-            const blob = new Blob([dataStr], { type: 'application/json' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `accounting_data_${new Date().toISOString().slice(0, 10)}.json`;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            URL.revokeObjectURL(url);
         }
     </script>
 </body>
