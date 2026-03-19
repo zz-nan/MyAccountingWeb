@@ -345,7 +345,9 @@
         async function getFileFromGitHub() {
             const config = getGitHubConfig();
             try {
-                const encodedPath = config.excelPath.split('/').map(encodeURIComponent).join('/');
+                // 确保路径不以斜杠开头
+                const cleanPath = config.excelPath.replace(/^\/+/, '');
+                const encodedPath = cleanPath.split('/').map(encodeURIComponent).join('/');
                 const data = await githubAPIRequest(`/repos/${config.username}/${config.repo}/contents/${encodedPath}`);
 
                 // 解码 base64 内容
@@ -386,7 +388,8 @@
             // 获取当前文件 SHA（如果存在）
             let sha = null;
             try {
-                const encodedPath = config.excelPath.split('/').map(encodeURIComponent).join('/');
+                const cleanPath = config.excelPath.replace(/^\/+/, '');
+                const encodedPath = cleanPath.split('/').map(encodeURIComponent).join('/');
                 const fileData = await githubAPIRequest(`/repos/${config.username}/${config.repo}/contents/${encodedPath}`);
                 sha = fileData.sha;
             } catch (error) {
@@ -401,7 +404,8 @@
                 sha,
             };
 
-            const encodedPath = config.excelPath.split('/').map(encodeURIComponent).join('/');
+            const cleanPath = config.excelPath.replace(/^\/+/, '');
+            const encodedPath = cleanPath.split('/').map(encodeURIComponent).join('/');
             await githubAPIRequest(`/repos/${config.username}/${config.repo}/contents/${encodedPath}`, 'PUT', body);
         }
 
@@ -436,11 +440,15 @@
         }
 
         function saveConfig() {
+            let excelPath = document.getElementById('excelPath').value.trim();
+            // 移除路径开头的斜杠
+            excelPath = excelPath.replace(/^\/+/, '');
+
             const config = {
                 username: document.getElementById('githubUsername').value.trim(),
                 repo: document.getElementById('githubRepo').value.trim(),
                 token: document.getElementById('githubToken').value.trim(),
-                excelPath: document.getElementById('excelPath').value.trim(),
+                excelPath: excelPath,
             };
 
             if (!config.username || !config.repo || !config.token) {
