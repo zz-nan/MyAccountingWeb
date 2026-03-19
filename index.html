@@ -376,7 +376,7 @@
 
             // 创建工作簿
             const workbook = XLSX.utils.book_new();
-            const worksheet = XLSX.utils.json_to_sheet([HEADERS, ...data], { header: HEADERS.slice(1) });
+            const worksheet = XLSX.utils.json_to_sheet([HEADERS, ...data]);
             XLSX.utils.book_append_sheet(workbook, worksheet, SHEET_NAME);
 
             // 生成 Excel 文件
@@ -506,12 +506,24 @@
             localStorage.setItem(DATA_KEY, JSON.stringify(billData));
         }
 
-        function deleteRecord(index) {
+        async function deleteRecord(index) {
             if (confirm('确定要删除这条记录吗？')) {
                 billData.splice(index, 1);
                 localStorage.setItem(DATA_KEY, JSON.stringify(billData));
                 loadBillList();
                 loadAnalysis();
+
+                // 自动同步到 GitHub（如果已配置）
+                const config = getGitHubConfig();
+                if (config) {
+                    try {
+                        showSyncStatus('删除后同步中...', 'syncing');
+                        await saveFileToGitHub(billData);
+                        showSyncStatus('删除并同步成功！', 'success');
+                    } catch (error) {
+                        showSyncStatus(`同步失败: ${error.message}`, 'error');
+                    }
+                }
             }
         }
 
@@ -610,8 +622,14 @@
 
             // 自动同步到 GitHub（如果已配置）
             const config = getGitHubConfig();
-            if (config && config.autoSync) {
-                await syncToGitHub();
+            if (config) {
+                try {
+                    showSyncStatus('自动同步中...', 'syncing');
+                    await saveFileToGitHub(billData);
+                    showSyncStatus('账单保存并同步成功！', 'success');
+                } catch (error) {
+                    showSyncStatus(`同步失败: ${error.message}`, 'error');
+                }
             }
         }
 
