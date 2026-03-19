@@ -528,7 +528,7 @@
         }
 
         // ==================== 初始化 ====================
-        document.addEventListener("DOMContentLoaded", () => {
+        document.addEventListener("DOMContentLoaded", async () => {
             initCharts();
             updateCategoryOptions();
             setDefaultDate();
@@ -547,19 +547,36 @@
             // 表单提交
             document.getElementById('billForm').addEventListener('submit', handleSubmit);
 
-            // 从本地存储加载数据
-            const savedData = localStorage.getItem(DATA_KEY);
-            if (savedData) {
-                billData = JSON.parse(savedData);
-            }
-
-            loadBillList();
-            loadAnalysis();
-
-            // 如果已配置 GitHub，自动加载
+            // 优先从 GitHub Excel 加载数据
             const config = getGitHubConfig();
-            if (config && config.autoLoad) {
-                loadFromGitHub();
+            if (config) {
+                // 从 GitHub 加载 Excel 数据
+                try {
+                    showSyncStatus('从 GitHub 加载数据中...', 'syncing');
+                    billData = await getFileFromGitHub();
+                    // 保存到本地存储作为备份
+                    localStorage.setItem(DATA_KEY, JSON.stringify(billData));
+                    loadBillList();
+                    loadAnalysis();
+                    showSyncStatus('数据加载成功！', 'success');
+                } catch (error) {
+                    // 加载失败时使用本地存储的备份
+                    showSyncStatus(`GitHub 加载失败，使用本地数据: ${error.message}`, 'error');
+                    const savedData = localStorage.getItem(DATA_KEY);
+                    if (savedData) {
+                        billData = JSON.parse(savedData);
+                    }
+                    loadBillList();
+                    loadAnalysis();
+                }
+            } else {
+                // 未配置 GitHub，使用本地存储
+                const savedData = localStorage.getItem(DATA_KEY);
+                if (savedData) {
+                    billData = JSON.parse(savedData);
+                }
+                loadBillList();
+                loadAnalysis();
             }
         });
 
