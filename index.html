@@ -95,6 +95,10 @@
             font-size: 0.85rem;
             padding: 8px 6px;
         }
+        /* 日期列不折行 */
+        .table-container tbody td:first-child {
+            white-space: nowrap;
+        }
         .btn-sm {
             padding: 0.2rem 0.4rem;
             font-size: 0.75rem;
@@ -102,7 +106,7 @@
         .action-buttons {
             display: flex;
             gap: 4px;
-            flex-wrap: wrap;
+            flex-wrap: nowrap;
         }
         .sync-status {
             position: fixed;
@@ -215,7 +219,13 @@
                 min-width: 44px;
             }
             .action-buttons {
-                gap: 8px;
+                gap: 4px;
+            }
+            /* 表格操作按钮保持较小尺寸以适应一行 */
+            .action-buttons .btn-sm {
+                min-height: 32px;
+                font-size: 0.7rem;
+                padding: 0.15rem 0.35rem;
             }
         }
 
@@ -895,12 +905,12 @@
                     `<small class="text-muted d-block d-sm-none" style="font-size: 0.75rem;">${item.备注}</small>` : '';
 
                 row.innerHTML = `
-                    <td>${item.日期}</td>
+                    <td class="text-nowrap">${item.日期}</td>
                     <td><span class="badge ${item.类型 === '收入' ? 'bg-success' : 'bg-danger'}">${item.类型}</span></td>
                     <td>${item.分类}${noteHtml}</td>
                     <td>¥${parseFloat(item.金额).toFixed(2)}</td>
                     <td class="d-none d-sm-table-cell">${item.备注 || '-'}</td>
-                    <td>
+                    <td class="text-nowrap">
                         <div class="action-buttons">
                             <button class="btn btn-sm btn-primary" onclick="editRecord(${index})">编辑</button>
                             <button class="btn btn-sm btn-danger" onclick="deleteRecord(${index})">删除</button>
