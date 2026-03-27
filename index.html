@@ -149,12 +149,6 @@
                         <label class="form-label">Excel 文件路径</label>
                         <input type="text" class="form-control form-control-sm" id="excelPath" value="data/收支账单.xlsx">
                     </div>
-                    <div class="mb-2 form-check">
-                        <input type="checkbox" class="form-check-input" id="autoBackup" checked>
-                        <label class="form-check-label" for="autoBackup">
-                            启用自动备份（每次保存数据时自动下载备份文件）
-                        </label>
-                    </div>
                     <button class="btn btn-sm btn-primary" onclick="saveConfig()">保存配置</button>
                     <button class="btn btn-sm btn-success" onclick="testConnection()">测试连接</button>
                     <button class="btn btn-sm btn-info" onclick="loadFromGitHub()">从 GitHub 加载</button>
@@ -167,8 +161,6 @@
                 <div class="d-flex justify-content-between align-items-center">
                     <h5 class="mb-0">收支账单录入</h5>
                     <div>
-                        <button class="btn btn-light btn-sm" onclick="exportBackup()">📥 导出备份</button>
-                        <button class="btn btn-light btn-sm" onclick="importBackup()">📤 导入备份</button>
                         <button class="btn btn-light btn-sm" onclick="syncToGitHub()">🔄 同步到 GitHub</button>
                     </div>
                 </div>
@@ -294,7 +286,6 @@
         // ==================== 常量定义 ====================
         const CONFIG_KEY = 'github_config';
         const DATA_KEY = 'accounting_data';
-        const BACKUP_KEY = 'accounting_backup';
         const HEADERS = ["日期", "类型", "分类", "金额", "备注"];
         const SHEET_NAME = "账单明细";
 
@@ -315,8 +306,6 @@
             try {
                 localStorage.setItem(DATA_KEY, JSON.stringify(data));
                 console.log('数据已保存到本地存储');
-                // 同时触发自动备份
-                autoBackupToFile(data);
             } catch (error) {
                 console.error('保存到本地存储失败:', error);
             }
@@ -332,122 +321,6 @@
                 console.error('从本地存储加载失败:', error);
             }
             return null;
-        }
-
-        // ==================== 本地文件备份管理 ====================
-        let autoBackupEnabled = false;
-        let lastBackupTime = null;
-
-        // 自动备份到本地下载文件
-        function autoBackupToFile(data) {
-            if (!autoBackupEnabled) return;
-
-            const now = new Date();
-            // 防止频繁备份，至少间隔 30 秒
-            if (lastBackupTime && (now - lastBackupTime) < 30000) {
-                return;
-            }
-            lastBackupTime = now;
-
-            try {
-                const backupData = {
-                    version: '1.0',
-                    timestamp: now.toISOString(),
-                    data: data
-                };
-
-                const blob = new Blob([JSON.stringify(backupData, null, 2)], {
-                    type: 'application/json'
-                });
-
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = `账单备份_${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}.json`;
-                a.click();
-                URL.revokeObjectURL(url);
-
-                console.log('自动备份文件已创建');
-            } catch (error) {
-                console.error('自动备份失败:', error);
-            }
-        }
-
-        // 手动导出备份文件
-        function exportBackup() {
-            const backupData = {
-                version: '1.0',
-                timestamp: new Date().toISOString(),
-                data: billData
-            };
-
-            const blob = new Blob([JSON.stringify(backupData, null, 2)], {
-                type: 'application/json'
-            });
-
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            const now = new Date();
-            a.download = `账单备份_${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}${String(now.getSeconds()).padStart(2, '0')}.json`;
-            a.click();
-            URL.revokeObjectURL(url);
-
-            alert('备份文件已导出！');
-        }
-
-        // 导入备份文件
-        function importBackup() {
-            const input = document.createElement('input');
-            input.type = 'file';
-            input.accept = '.json';
-
-            input.onchange = function(e) {
-                const file = e.target.files[0];
-                if (!file) return;
-
-                const reader = new FileReader();
-                reader.onload = function(e) {
-                    try {
-                        const backupData = JSON.parse(e.target.result);
-
-                        if (!backupData.data || !Array.isArray(backupData.data)) {
-                            alert('备份文件格式不正确！');
-                            return;
-                        }
-
-                        const confirmMsg = `备份时间: ${backupData.timestamp || '未知'}\n包含 ${backupData.data.length} 条记录\n\n确认要恢复此备份吗？（当前数据将被替换）`;
-                        if (!confirm(confirmMsg)) {
-                            return;
-                        }
-
-                        billData = backupData.data;
-                        saveToLocalStorage(billData);
-                        loadBillList();
-                        loadAnalysis();
-
-                        alert('数据恢复成功！');
-
-                        // 如果配置了 GitHub，询问是否同步到云端
-                        const config = getGitHubConfig();
-                        if (config && confirm('是否同步到 GitHub？')) {
-                            syncToGitHub();
-                        }
-                    } catch (error) {
-                        alert('导入失败：' + error.message);
-                    }
-                };
-
-                reader.readAsText(file);
-            };
-
-            input.click();
-        }
-
-        // 从备份文件恢复（页面加载时检查）
-        function checkBackupFile() {
-            const lastBackup = localStorage.getItem(BACKUP_KEY);
-            return lastBackup ? JSON.parse(lastBackup) : null;
         }
 
         // ==================== GitHub API ====================
@@ -575,9 +448,6 @@
             const configSection = document.getElementById('configSection');
             const configIcon = document.getElementById('configIcon');
 
-            // 读取自动备份设置（从单独的 localStorage 键读取）
-            const autoBackupSetting = localStorage.getItem('autoBackupEnabled');
-
             if (config) {
                 configSection.classList.add('github-connected');
                 configSection.classList.remove('config-section');
@@ -588,13 +458,6 @@
                 document.getElementById('githubRepo').value = config.repo || '';
                 document.getElementById('githubToken').value = config.token || '';
                 document.getElementById('excelPath').value = config.excelPath || 'data/收支账单.xlsx';
-                // 优先使用配置中的设置，否则使用独立的自动备份设置
-                document.getElementById('autoBackup').checked = config.autoBackup !== false;
-                autoBackupEnabled = config.autoBackup !== false;
-            } else {
-                // 未配置 GitHub，使用独立的自动备份设置
-                document.getElementById('autoBackup').checked = autoBackupSetting === 'true';
-                autoBackupEnabled = autoBackupSetting === 'true';
             }
         }
 
@@ -603,28 +466,19 @@
             // 移除路径开头的斜杠
             excelPath = excelPath.replace(/^\/+/, '');
 
-            const autoBackup = document.getElementById('autoBackup').checked;
-
-            // 保存自动备份设置到独立的 localStorage 键
-            localStorage.setItem('autoBackupEnabled', autoBackup);
-
             const config = {
                 username: document.getElementById('githubUsername').value.trim(),
                 repo: document.getElementById('githubRepo').value.trim(),
                 token: document.getElementById('githubToken').value.trim(),
                 excelPath: excelPath,
-                autoBackup: autoBackup,
             };
 
             if (!config.username || !config.repo || !config.token) {
-                // 只保存自动备份设置，不保存 GitHub 配置
-                autoBackupEnabled = autoBackup;
-                alert('自动备份设置已保存');
+                alert('请填写完整的 GitHub 配置信息');
                 return;
             }
 
             saveGitHubConfig(config);
-            autoBackupEnabled = config.autoBackup;
             updateConfigUI();
             alert('配置已保存');
         }
@@ -754,35 +608,7 @@
                     showSyncStatus(`GitHub 同步失败: ${error.message}，使用本地数据`, 'error');
                 }
             }
-
-            // 显示数据保护提示
-            showDataProtectionTip();
         });
-
-        // 显示数据保护提示（首次加载或数据为空时）
-        function showDataProtectionTip() {
-            const tipKey = 'data_protection_tip_shown';
-            const tipShown = localStorage.getItem(tipKey);
-
-            if (!tipShown) {
-                setTimeout(() => {
-                    const message = `💡 数据保护提示：
-
-您的数据安全非常重要！我们提供多层保护：
-
-✅ 自动保存：所有数据自动保存到浏览器本地存储
-📥 手动备份：建议定期点击"导出备份"按钮下载备份文件
-📤 数据恢复：如需恢复数据，点击"导入备份"选择备份文件即可
-🔄 云端同步：配置 GitHub 后可自动同步到云端
-
-即使清除浏览器数据，也可以通过备份文件或 GitHub 恢复所有记录！
-
-此提示仅显示一次`;
-                    alert(message);
-                    localStorage.setItem(tipKey, 'true');
-                }, 1000);
-            }
-        }
 
         function initCharts() {
             pieChart = echarts.init(document.getElementById('pieChart'));
